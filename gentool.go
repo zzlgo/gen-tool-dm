@@ -6,6 +6,9 @@ import (
 	"log"
 	"os"
 	"strings"
+	"unicode"
+
+	dm "github.com/jasonlabz/gorm-dm-driver"
 
 	"gopkg.in/yaml.v3"
 	"gorm.io/driver/clickhouse"
@@ -27,6 +30,8 @@ const (
 	dbSQLite     DBType = "sqlite"
 	dbSQLServer  DBType = "sqlserver"
 	dbClickHouse DBType = "clickhouse"
+	dbDm         DBType = "dm" // 达梦数据库
+
 )
 const (
 	defaultQueryPath = "./dao/query"
@@ -98,13 +103,15 @@ func connectDB(t DBType, dsn string) (*gorm.DB, error) {
 		return gorm.Open(sqlserver.Open(dsn))
 	case dbClickHouse:
 		return gorm.Open(clickhouse.Open(dsn))
+	case dbDm:
+		return gorm.Open(dm.Open(dsn))
 	default:
 		return nil, fmt.Errorf("unknow db %q (support mysql || postgres || sqlite || sqlserver for now)", t)
 	}
 }
 
 // genModels is gorm/gen generated models
-func genModels(g *gen.Generator, db *gorm.DB, tables []string) (models []interface{}, err error) {
+func genModels(g *gen.Generator, db *gorm.DB, tables []string, dbType string) (models []interface{}, err error) {
 	if len(tables) == 0 {
 		// Execute tasks for all tables in the database
 		tables, err = db.Migrator().GetTables()
@@ -116,7 +123,14 @@ func genModels(g *gen.Generator, db *gorm.DB, tables []string) (models []interfa
 	// Execute some data table tasks
 	models = make([]interface{}, len(tables))
 	for i, tableName := range tables {
-		models[i] = g.GenerateModel(tableName)
+		model := g.GenerateModel(tableName)
+		for _, d := range model.Fields {
+			if DBType(dbType) == dbDm {
+				// 属性名
+				d.Name = ColumnNameToPropertyName(d.ColumnName)
+			}
+		}
+		models[i] = model
 	}
 	return models, nil
 }
@@ -228,9 +242,20 @@ func main() {
 		FieldSignable:     config.FieldSignable,
 	})
 
+	if DBType(config.DB) == dbDm {
+		// 对象名
+		g.WithModelNameStrategy(func(tableName string) (modelName string) {
+			return ColumnNameToPropertyName(tableName)
+		})
+		// json标签
+		g.WithJSONTagNameStrategy(func(columnName string) (tagContent string) {
+			return ColumnNameToJsonName(columnName)
+		})
+	}
+
 	g.UseDB(db)
 
-	models, err := genModels(g, db, config.Tables)
+	models, err := genModels(g, db, config.Tables, config.DB)
 	if err != nil {
 		log.Fatalln("get tables info fail:", err)
 	}
@@ -240,4 +265,81 @@ func main() {
 	}
 
 	g.Execute()
+}
+
+// https://github.com/golang/lint/blob/master/lint.go
+var commonInitialisms = map[string]struct{}{
+	"ACL":   {},
+	"API":   {},
+	"ASCII": {},
+	"CPU":   {},
+	"CSS":   {},
+	"DNS":   {},
+	"EOF":   {},
+	"GUID":  {},
+	"HTML":  {},
+	"HTTP":  {},
+	"HTTPS": {},
+	"ID":    {},
+	"IP":    {},
+	"JSON":  {},
+	"LHS":   {},
+	"QPS":   {},
+	"RAM":   {},
+	"RHS":   {},
+	"RPC":   {},
+	"SLA":   {},
+	"SMTP":  {},
+	"SQL":   {},
+	"SSH":   {},
+	"TCP":   {},
+	"TLS":   {},
+	"TTL":   {},
+	"UDP":   {},
+	"UI":    {},
+	"UID":   {},
+	"UUID":  {},
+	"URI":   {},
+	"URL":   {},
+	"UTF8":  {},
+	"VM":    {},
+	"XML":   {},
+	"XMPP":  {},
+	"XSRF":  {},
+	"XSS":   {},
+}
+
+// ColumnNameToPropertyName 将数据库列名转换为Go结构体属性名
+func ColumnNameToPropertyName(columnName string) string {
+	if columnName == "" {
+		return ""
+	}
+
+	// 分割下划线
+	parts := strings.Split(strings.ToLower(columnName), "_")
+	var result strings.Builder
+
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+
+		// 检查是否为常见缩写
+		if _, ok := commonInitialisms[strings.ToUpper(part)]; ok {
+			result.WriteString(strings.ToUpper(part))
+			continue
+		}
+
+		// 首字母大写，其余小写
+		runes := []rune(part)
+		runes[0] = unicode.ToUpper(runes[0])
+		result.WriteString(string(runes))
+	}
+
+	return result.String()
+}
+
+// ColumnNameToJsonName
+func ColumnNameToJsonName(columnName string) string {
+	return strings.ToLower(columnName)
 }
