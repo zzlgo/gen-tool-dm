@@ -128,11 +128,26 @@ func genModels(g *gen.Generator, db *gorm.DB, tables []string, dbType string) (m
 			if DBType(dbType) == dbDm {
 				// 属性名
 				d.Name = ColumnNameToPropertyName(d.ColumnName)
+				for tagKey, tagValue := range d.GORMTag {
+					if tagKey == "type" && contains(tagValue, "TINYINT") {
+						// 将数据库TINYINT类型转换为go的bool类型
+						d.Type = "bool"
+					}
+				}
 			}
 		}
 		models[i] = model
 	}
 	return models, nil
+}
+
+func contains(array []string, t string) bool {
+	for _, item := range array {
+		if item == t {
+			return true
+		}
+	}
+	return false
 }
 
 // parseCmdFromYaml parse cmd param from yaml
